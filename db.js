@@ -1,13 +1,32 @@
 const { DatabaseSync } = require('node:sqlite');
 const bcrypt = require('bcryptjs');
 const path = require('path');
+const fs = require('fs');
 
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'teamflow.db');
-const db = new DatabaseSync(DB_PATH);
+// Railway has ephemeral filesystem — use /tmp which is always writable
+// Locally it will use the project root
+let DB_PATH;
+if (process.env.DB_PATH) {
+  DB_PATH = process.env.DB_PATH;
+} else if (process.env.RAILWAY_ENVIRONMENT) {
+  DB_PATH = '/tmp/teamflow.db';
+} else {
+  DB_PATH = path.join(__dirname, '..', 'teamflow.db');
+}
 
-// Enable WAL mode for better performance
+console.log(`🗄️  Using database at: ${DB_PATH}`);
 
-db.exec('PRAGMA foreign_keys = ON');
+let db;
+try {
+  db = new DatabaseSync(DB_PATH);
+} catch (err) {
+  console.warn('⚠️  Could not open DB at', DB_PATH, '— falling back to /tmp/teamflow.db');
+  DB_PATH = '/tmp/teamflow.db';
+  db = new DatabaseSync(DB_PATH);
+}
+
+// Enable foreign keys
+try { db.exec('PRAGMA foreign_keys = ON'); } catch(e) {}
 
 // Create tables
 db.exec(`
@@ -64,31 +83,30 @@ if (userCount.count === 0) {
   const adminPw = bcrypt.hashSync('admin123', 10);
   const memberPw = bcrypt.hashSync('member123', 10);
 
-  const insertUser = db.prepare(`
-    INSERT INTO users (name, email, password, role, color) VALUES (?, ?, ?, ?, ?)
-  `);
+  const insertUser = db.prepare(
+    'INSERT INTO users (name, email, password, role, color) VALUES (?, ?, ?, ?, ?)'
+  );
 
   const admin = insertUser.run('Alex Admin', 'admin@test.com', adminPw, 'admin', '#ff6b6b');
   const member = insertUser.run('Jamie Member', 'member@test.com', memberPw, 'member', '#a29bfe');
 
-  const insertProject = db.prepare(`
-    INSERT INTO projects (name, description, emoji, color, created_by) VALUES (?, ?, ?, ?, ?)
-  `);
+  const insertProject = db.prepare(
+    'INSERT INTO projects (name, description, emoji, color, created_by) VALUES (?, ?, ?, ?, ?)'
+  );
 
   const p1 = insertProject.run('Website Redesign', 'Give the site a proper glow-up', '🎨', '#ff6b6b', admin.lastInsertRowid);
   const p2 = insertProject.run('Mobile App v2', 'Android + iOS rebuild', '📱', '#4ecdc4', admin.lastInsertRowid);
   const p3 = insertProject.run('API Integration', 'Hook up third party services', '🔌', '#a29bfe', admin.lastInsertRowid);
 
-  const insertMember = db.prepare(`INSERT OR IGNORE INTO project_members (project_id, user_id) VALUES (?, ?)`);
+  const insertMember = db.prepare('INSERT OR IGNORE INTO project_members (project_id, user_id) VALUES (?, ?)');
   [p1, p2, p3].forEach(p => {
     insertMember.run(p.lastInsertRowid, admin.lastInsertRowid);
     insertMember.run(p.lastInsertRowid, member.lastInsertRowid);
   });
 
-  const insertTask = db.prepare(`
-    INSERT INTO tasks (title, project_id, assignee_id, created_by, priority, status, due_date)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `);
+  const insertTask = db.prepare(
+    'INSERT INTO tasks (title, project_id, assignee_id, created_by, priority, status, due_date) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  );
 
   const aid = admin.lastInsertRowid;
   const mid = member.lastInsertRowid;
